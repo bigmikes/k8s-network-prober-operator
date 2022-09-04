@@ -1,0 +1,24 @@
+# permissions for end users to edit networkprobers.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: networkprober-editor-role
+rules:
+- apiGroups:
+  - probes.bigmikes.io
+  resources:
+  - networkprobers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - probes.bigmikes.io
+  resources:
+  - networkprobers/status
+  verbs:
+  - get

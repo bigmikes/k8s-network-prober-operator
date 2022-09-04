@@ -1,0 +1,10 @@
+apiVersion: probes.bigmikes.io/v1alpha1
+kind: NetworkProber
+metadata:
+  name: networkprober-sample
+spec:
+  podSelector:
+    app: db
+  httpTargets:
+    - "http://test"
+    - "http://test-2"
