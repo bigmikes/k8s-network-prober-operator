@@ -89,10 +89,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (&controllers.NetworkProberReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
+	rec := controllers.NewNetworkProberReconciler(mgr.GetClient(), mgr.GetScheme())
+	if err = rec.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "NetworkProber")
 		os.Exit(1)
 	}

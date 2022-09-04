@@ -20,7 +20,9 @@ import (
 	"context"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -34,6 +36,18 @@ import (
 type NetworkProberReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+
+	podSet       map[types.NamespacedName]corev1.Pod
+	netProberSet map[types.NamespacedName]probesv1alpha1.NetworkProber
+}
+
+func NewNetworkProberReconciler(clt client.Client, scheme *runtime.Scheme) *NetworkProberReconciler {
+	return &NetworkProberReconciler{
+		Client:       clt,
+		Scheme:       scheme,
+		podSet:       make(map[types.NamespacedName]corev1.Pod),
+		netProberSet: make(map[types.NamespacedName]probesv1alpha1.NetworkProber),
+	}
 }
 
 //+kubebuilder:rbac:groups=probes.bigmikes.io,resources=networkprobers,verbs=get;list;watch;create;update;patch;delete
@@ -55,7 +69,27 @@ type NetworkProberReconciler struct {
 func (r *NetworkProberReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
 
-	log.Info("Got", "name", req.NamespacedName)
+	log.Info("Reconciling", "name", req.NamespacedName)
+
+	pod, deleted, err := r.getPod(ctx, req)
+	if err != nil {
+		log.Error(err, "failed to get pod")
+		return ctrl.Result{}, err
+	}
+	if pod != nil {
+		// Request contains a Pod
+		log.Info("Got Pod", "deleted", deleted)
+	} else {
+		netProber, deleted, err := r.getNetProber(ctx, req)
+		if err != nil {
+			log.Error(err, "failed to get net prober")
+			return ctrl.Result{}, err
+		}
+		if netProber != nil {
+			// Request contains a NetworkProber
+			log.Info("Got NetworkProber", "deleted", deleted)
+		}
+	}
 
 	return ctrl.Result{}, nil
 }
@@ -66,4 +100,38 @@ func (r *NetworkProberReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&probesv1alpha1.NetworkProber{}).
 		Watches(&source.Kind{Type: &corev1.Pod{}}, &handler.EnqueueRequestForObject{}).
 		Complete(r)
+}
+
+func (r *NetworkProberReconciler) getPod(ctx context.Context, req ctrl.Request) (*corev1.Pod, bool, error) {
+	var pod corev1.Pod
+	err := r.Get(ctx, req.NamespacedName, &pod)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			if pod, ok := r.podSet[req.NamespacedName]; ok {
+				// This was a pod and not it has been deleted
+				return &pod, true, nil
+			}
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	r.podSet[req.NamespacedName] = pod
+	return &pod, false, nil
+}
+
+func (r *NetworkProberReconciler) getNetProber(ctx context.Context, req ctrl.Request) (*probesv1alpha1.NetworkProber, bool, error) {
+	var netProber probesv1alpha1.NetworkProber
+	err := r.Get(ctx, req.NamespacedName, &netProber)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			if netProber, ok := r.netProberSet[req.NamespacedName]; ok {
+				// This was a pod and not it has been deleted
+				return &netProber, true, nil
+			}
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	r.netProberSet[req.NamespacedName] = netProber
+	return &netProber, false, nil
 }

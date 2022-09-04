@@ -23,7 +23,7 @@ import (
 // NetworkProberSpec defines the desired state of NetworkProber
 type NetworkProberSpec struct {
 	// PodSelector is the label selector to match Pods where the prober sidecar container is deployed.
-	PodSelector map[string]string `json:"podSelector"`
+	PodSelector metav1.LabelSelector `json:"podSelector"`
 	// HttpTargets is the list of HTTP endpoints that the prober queries.
 	HttpTargets []string `json:"httpTargets"`
 }

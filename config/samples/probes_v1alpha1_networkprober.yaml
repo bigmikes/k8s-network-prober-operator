@@ -4,7 +4,8 @@ metadata:
   name: networkprober-sample
 spec:
   podSelector:
-    app: db
+    matchLabels:
+      app: db
   httpTargets:
     - "http://test"
     - "http://test-2"
