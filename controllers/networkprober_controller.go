@@ -21,6 +21,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -48,6 +49,14 @@ func NewNetworkProberReconciler(clt client.Client, scheme *runtime.Scheme) *Netw
 		podSet:       make(map[types.NamespacedName]corev1.Pod),
 		netProberSet: make(map[types.NamespacedName]probesv1alpha1.NetworkProber),
 	}
+}
+
+// SetupWithManager sets up the controller with the Manager.
+func (r *NetworkProberReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&probesv1alpha1.NetworkProber{}).
+		Watches(&source.Kind{Type: &corev1.Pod{}}, &handler.EnqueueRequestForObject{}).
+		Complete(r)
 }
 
 //+kubebuilder:rbac:groups=probes.bigmikes.io,resources=networkprobers,verbs=get;list;watch;create;update;patch;delete
@@ -79,6 +88,7 @@ func (r *NetworkProberReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	if pod != nil {
 		// Request contains a Pod
 		log.Info("Got Pod", "deleted", deleted)
+		return r.reconcilePod(ctx, pod, deleted)
 	} else {
 		netProber, deleted, err := r.getNetProber(ctx, req)
 		if err != nil {
@@ -88,18 +98,11 @@ func (r *NetworkProberReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		if netProber != nil {
 			// Request contains a NetworkProber
 			log.Info("Got NetworkProber", "deleted", deleted)
+			return r.reconcileNetworkProber(ctx, netProber, deleted)
 		}
 	}
 
 	return ctrl.Result{}, nil
-}
-
-// SetupWithManager sets up the controller with the Manager.
-func (r *NetworkProberReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&probesv1alpha1.NetworkProber{}).
-		Watches(&source.Kind{Type: &corev1.Pod{}}, &handler.EnqueueRequestForObject{}).
-		Complete(r)
 }
 
 func (r *NetworkProberReconciler) getPod(ctx context.Context, req ctrl.Request) (*corev1.Pod, bool, error) {
@@ -109,6 +112,7 @@ func (r *NetworkProberReconciler) getPod(ctx context.Context, req ctrl.Request) 
 		if apierrors.IsNotFound(err) {
 			if pod, ok := r.podSet[req.NamespacedName]; ok {
 				// This was a pod and not it has been deleted
+				delete(r.podSet, req.NamespacedName)
 				return &pod, true, nil
 			}
 			return nil, false, nil
@@ -125,7 +129,8 @@ func (r *NetworkProberReconciler) getNetProber(ctx context.Context, req ctrl.Req
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			if netProber, ok := r.netProberSet[req.NamespacedName]; ok {
-				// This was a pod and not it has been deleted
+				// This was a pod and now it has been deleted
+				delete(r.netProberSet, req.NamespacedName)
 				return &netProber, true, nil
 			}
 			return nil, false, nil
@@ -134,4 +139,33 @@ func (r *NetworkProberReconciler) getNetProber(ctx context.Context, req ctrl.Req
 	}
 	r.netProberSet[req.NamespacedName] = netProber
 	return &netProber, false, nil
+}
+
+func (r *NetworkProberReconciler) reconcilePod(ctx context.Context, pod *corev1.Pod, deleted bool) (ctrl.Result, error) {
+
+	return ctrl.Result{}, nil
+}
+
+func (r *NetworkProberReconciler) reconcileNetworkProber(ctx context.Context,
+	netProber *probesv1alpha1.NetworkProber,
+	deleted bool) (ctrl.Result, error) {
+	log := log.FromContext(ctx)
+	// TODO handle delete case
+	// TODO handle modify case
+
+	podList := &corev1.PodList{}
+	selector := labels.SelectorFromSet(netProber.Spec.PodSelector.MatchLabels)
+	listOption := client.MatchingLabelsSelector{
+		Selector: selector,
+	}
+	err := r.List(ctx, podList, listOption)
+	if err != nil {
+		log.Error(err, "failed to list pods")
+		return ctrl.Result{}, err
+	}
+	for _, pod := range podList.Items {
+		log.Info("Matching pod", "name", pod.Name)
+	}
+
+	return ctrl.Result{}, nil
 }

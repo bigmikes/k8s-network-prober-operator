@@ -5,7 +5,7 @@ metadata:
 spec:
   podSelector:
     matchLabels:
-      app: db
+      app: net-prober
   httpTargets:
     - "http://test"
     - "http://test-2"
