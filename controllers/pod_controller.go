@@ -19,7 +19,6 @@ package controllers
 import (
 	"context"
 
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -29,32 +28,26 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	probesv1alpha1 "github.com/bigmikes/k8s-network-prober-operator/api/v1alpha1"
+	corev1 "k8s.io/api/core/v1"
 )
 
-// NetworkProberReconciler reconciles a NetworkProber object
-type NetworkProberReconciler struct {
+// PodReconciler reconciles a Pod object
+type PodReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 
-	netProberSet map[types.NamespacedName]probesv1alpha1.NetworkProber
+	podSet map[types.NamespacedName]corev1.Pod
 }
 
-func NewNetworkProberReconciler(clt client.Client, scheme *runtime.Scheme) *NetworkProberReconciler {
-	return &NetworkProberReconciler{
-		Client:       clt,
-		Scheme:       scheme,
-		netProberSet: make(map[types.NamespacedName]probesv1alpha1.NetworkProber),
+func NewPodReconciler(clt client.Client, scheme *runtime.Scheme) *PodReconciler {
+	return &PodReconciler{
+		Client: clt,
+		Scheme: scheme,
+		podSet: make(map[types.NamespacedName]corev1.Pod),
 	}
 }
 
-// SetupWithManager sets up the controller with the Manager.
-func (r *NetworkProberReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&probesv1alpha1.NetworkProber{}).
-		Complete(r)
-}
-
-//+kubebuilder:rbac:groups=probes.bigmikes.io,resources=networkprobers,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=probes.bigmikes.io,resources=networkprobers,verbs=get;list;watch;update;patch
 //+kubebuilder:rbac:groups=probes.bigmikes.io,resources=networkprobers/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=probes.bigmikes.io,resources=networkprobers/finalizers,verbs=update
 //+kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;create;update;patch;delete
@@ -64,20 +57,20 @@ func (r *NetworkProberReconciler) SetupWithManager(mgr ctrl.Manager) error {
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 // TODO(user): Modify the Reconcile function to compare the state specified by
-// the NetworkProber object against the actual cluster state, and then
+// the Pod object against the actual cluster state, and then
 // perform operations to make the cluster state reflect the state specified by
 // the user.
 //
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.12.2/pkg/reconcile
-func (r *NetworkProberReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
 
 	log.Info("Reconciling", "name", req.NamespacedName)
 
-	netProber, deleted, err := r.getNetProber(ctx, req)
+	pod, deleted, err := r.getPod(ctx, req)
 	if err != nil {
-		log.Error(err, "failed to get network prober")
+		log.Error(err, "failed to get pod")
 		return ctrl.Result{}, err
 	}
 	_ = deleted
@@ -85,37 +78,44 @@ func (r *NetworkProberReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	// TODO handle delete case
 	// TODO handle modify case
 
-	podList := &corev1.PodList{}
-	selector := labels.SelectorFromSet(netProber.Spec.PodSelector.MatchLabels)
-	listOption := client.MatchingLabelsSelector{
-		Selector: selector,
-	}
-	err = r.List(ctx, podList, listOption)
+	netProberList := &probesv1alpha1.NetworkProberList{}
+	err = r.List(ctx, netProberList)
 	if err != nil {
 		log.Error(err, "failed to list pods")
 		return ctrl.Result{}, err
 	}
-	for _, pod := range podList.Items {
-		log.Info("Matching pod", "name", pod.Name)
+	for _, netProber := range netProberList.Items {
+		log.Info("Listed NetProber", "name", netProber.Name)
+		selector := labels.SelectorFromSet(netProber.Spec.PodSelector.MatchLabels)
+		if selector.Matches(labels.Set(pod.Labels)) {
+			log.Info("Match", "pod", pod.Name, "netProber", netProber.Name)
+		}
 	}
 
 	return ctrl.Result{}, nil
 }
 
-func (r *NetworkProberReconciler) getNetProber(ctx context.Context, req ctrl.Request) (*probesv1alpha1.NetworkProber, bool, error) {
-	var netProber probesv1alpha1.NetworkProber
-	err := r.Get(ctx, req.NamespacedName, &netProber)
+// SetupWithManager sets up the controller with the Manager.
+func (r *PodReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&corev1.Pod{}).
+		Complete(r)
+}
+
+func (r *PodReconciler) getPod(ctx context.Context, req ctrl.Request) (*corev1.Pod, bool, error) {
+	var pod corev1.Pod
+	err := r.Get(ctx, req.NamespacedName, &pod)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			if netProber, ok := r.netProberSet[req.NamespacedName]; ok {
-				// This was a pod and now it has been deleted
-				delete(r.netProberSet, req.NamespacedName)
-				return &netProber, true, nil
+			if pod, ok := r.podSet[req.NamespacedName]; ok {
+				// This was a pod and not it has been deleted
+				delete(r.podSet, req.NamespacedName)
+				return &pod, true, nil
 			}
 			return nil, false, nil
 		}
 		return nil, false, err
 	}
-	r.netProberSet[req.NamespacedName] = netProber
-	return &netProber, false, nil
+	r.podSet[req.NamespacedName] = pod
+	return &pod, false, nil
 }

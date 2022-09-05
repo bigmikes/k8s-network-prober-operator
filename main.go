@@ -89,11 +89,18 @@ func main() {
 		os.Exit(1)
 	}
 
-	rec := controllers.NewNetworkProberReconciler(mgr.GetClient(), mgr.GetScheme())
-	if err = rec.SetupWithManager(mgr); err != nil {
+	recNetProber := controllers.NewNetworkProberReconciler(mgr.GetClient(), mgr.GetScheme())
+	if err = recNetProber.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "NetworkProber")
 		os.Exit(1)
 	}
+
+	recPod := controllers.NewPodReconciler(mgr.GetClient(), mgr.GetScheme())
+	if err = recPod.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "Pod")
+		os.Exit(1)
+	}
+
 	//+kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
