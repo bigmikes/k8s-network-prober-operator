@@ -22,8 +22,12 @@ import (
 	"net/http"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
+
+	probesv1alpha1 "github.com/bigmikes/k8s-network-prober-operator/api/v1alpha1"
 )
 
 const (
@@ -48,22 +52,37 @@ func (a *SidecarInjecter) InjectDecoder(d *admission.Decoder) error {
 
 // podAnnotator adds an annotation to every incoming pods.
 func (a *SidecarInjecter) Handle(ctx context.Context, req admission.Request) admission.Response {
+	log := log.FromContext(ctx)
+
 	pod := &corev1.Pod{}
 
 	err := a.decoder.Decode(req, pod)
 	if err != nil {
 		return admission.Errored(http.StatusBadRequest, err)
 	}
+	log.Info("Mutating", "name", pod.Name)
 
-	if pod.Annotations == nil {
-		pod.Annotations = map[string]string{}
+	netProberList := &probesv1alpha1.NetworkProberList{}
+	err = a.Client.List(ctx, netProberList)
+	if err != nil {
+		log.Error(err, "failed to get list of NetworkProber")
+		return admission.Errored(http.StatusInternalServerError, err)
 	}
-	if val := pod.Annotations[AnnotationKey]; val != AnnotationVal {
-		pod.Annotations[AnnotationKey] = AnnotationVal
-		pod.Spec.Containers = append(pod.Spec.Containers, corev1.Container{
-			Name:  "net-prober",
-			Image: "bigmikes/kube-net-prober:test-version",
-		})
+	for _, netProber := range netProberList.Items {
+		log.Info("Evaluating selector", "net-prober", netProber.Name)
+		selector := labels.SelectorFromSet(netProber.Spec.PodSelector.MatchLabels)
+		if selector.Matches(labels.Set(pod.Labels)) {
+			if pod.Annotations == nil {
+				pod.Annotations = map[string]string{}
+			}
+			if val := pod.Annotations[AnnotationKey]; val != AnnotationVal {
+				pod.Annotations[AnnotationKey] = AnnotationVal
+				pod.Spec.Containers = append(pod.Spec.Containers, corev1.Container{
+					Name:  "net-prober",
+					Image: "bigmikes/kube-net-prober:test-version",
+				})
+			}
+		}
 	}
 
 	marshaledPod, err := json.Marshal(pod)
