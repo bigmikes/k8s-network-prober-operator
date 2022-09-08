@@ -79,7 +79,25 @@ func (a *SidecarInjecter) Handle(ctx context.Context, req admission.Request) adm
 				pod.Annotations[AnnotationKey] = AnnotationVal
 				pod.Spec.Containers = append(pod.Spec.Containers, corev1.Container{
 					Name:  "net-prober",
-					Image: "bigmikes/kube-net-prober:test-version",
+					Image: "bigmikes/kube-net-prober:test-version-v2",
+					VolumeMounts: []corev1.VolumeMount{
+						{
+							Name:      "net-prober-vol",
+							MountPath: "/etc/netprober",
+						},
+					},
+				})
+				volumeMode := int32(420)
+				pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
+					Name: "net-prober-vol",
+					VolumeSource: corev1.VolumeSource{
+						ConfigMap: &corev1.ConfigMapVolumeSource{
+							DefaultMode: &volumeMode,
+							LocalObjectReference: corev1.LocalObjectReference{
+								Name: netProber.Name,
+							},
+						},
+					},
 				})
 			}
 		}

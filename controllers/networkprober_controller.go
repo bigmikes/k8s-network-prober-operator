@@ -18,6 +18,7 @@ package controllers
 
 import (
 	"context"
+	"encoding/json"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -51,6 +52,7 @@ func NewNetworkProberReconciler(clt client.Client, scheme *runtime.Scheme) *Netw
 func (r *NetworkProberReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&probesv1alpha1.NetworkProber{}).
+		Owns(&corev1.ConfigMap{}).
 		Complete(r)
 }
 
@@ -60,6 +62,7 @@ func (r *NetworkProberReconciler) SetupWithManager(mgr ctrl.Manager) error {
 //+kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=core,resources=pods/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=core,resources=pods/finalizers,verbs=update
+//+kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -85,6 +88,18 @@ func (r *NetworkProberReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	// TODO handle delete case
 	// TODO handle modify case
 
+	// Create ConfigMap
+	configMap := &corev1.ConfigMap{}
+	configMapExists := true
+	err = r.Get(ctx, req.NamespacedName, configMap)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			// ConfigMap does not exist, create it
+			configMapExists = false
+		}
+	}
+
+	// Find all matching Pod and register their IP address in the ConfigMap
 	podList := &corev1.PodList{}
 	selector := labels.SelectorFromSet(netProber.Spec.PodSelector.MatchLabels)
 	listOption := client.MatchingLabelsSelector{
@@ -93,10 +108,36 @@ func (r *NetworkProberReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	err = r.List(ctx, podList, listOption)
 	if err != nil {
 		log.Error(err, "failed to list pods")
-		return ctrl.Result{}, err
+		return ctrl.Result{Requeue: true}, err
 	}
+	endpoints := []corev1.PodIP{}
 	for _, pod := range podList.Items {
 		log.Info("Matching pod", "name", pod.Name)
+		endpoints = append(endpoints, pod.Status.PodIPs[0])
+	}
+
+	endpointsJSON, err := json.Marshal(endpoints)
+	if err != nil {
+		log.Error(err, "failed to marshal endpoints list")
+		return ctrl.Result{}, err
+	}
+
+	configMap.Name = netProber.Name
+	configMap.Namespace = netProber.Namespace
+	configMap.BinaryData = map[string][]byte{
+		"endpointsJSON": endpointsJSON,
+	}
+	if configMapExists {
+		err = r.Update(ctx, configMap)
+	} else {
+		err = r.Create(ctx, configMap)
+	}
+
+	if err != nil {
+		log.Error(err, "failed to create or update configmap")
+		if apierrors.IsConflict(err) {
+			return ctrl.Result{Requeue: true}, err
+		}
 	}
 
 	return ctrl.Result{}, nil
