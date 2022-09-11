@@ -6,6 +6,7 @@ spec:
   podSelector:
     matchLabels:
       app: net-prober
-  httpTargets:
-    - "http://test"
-    - "http://test-2"
+  httpPort: "9090"
+  pollingPeriod: "10s"
+  httpPrometheusPort: "1222"
+  agentImage: "bigmikes/kube-net-prober:test-version-v4"

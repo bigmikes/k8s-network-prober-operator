@@ -19,6 +19,7 @@ package controllers
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -31,6 +32,16 @@ import (
 
 	probesv1alpha1 "github.com/bigmikes/k8s-network-prober-operator/api/v1alpha1"
 )
+
+type Config struct {
+	EndpointsList []Endpoint    `json:"endpointsList"`
+	PollingPeriod time.Duration `json:"pollingPeriod"`
+}
+
+type Endpoint struct {
+	IP   string `json:"ip"`
+	Port string `json:"port"`
+}
 
 // NetworkProberReconciler reconciles a NetworkProber object
 type NetworkProberReconciler struct {
@@ -110,13 +121,21 @@ func (r *NetworkProberReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		log.Error(err, "failed to list pods")
 		return ctrl.Result{Requeue: true}, err
 	}
-	endpoints := []corev1.PodIP{}
+	config := Config{}
 	for _, pod := range podList.Items {
 		log.Info("Matching pod", "name", pod.Name)
-		endpoints = append(endpoints, pod.Status.PodIPs[0])
+		config.EndpointsList = append(config.EndpointsList, Endpoint{
+			IP:   pod.Status.PodIPs[0].IP,
+			Port: netProber.Spec.HttpPort,
+		})
+	}
+	config.PollingPeriod, err = time.ParseDuration(netProber.Spec.PollingPeriod)
+	if err != nil {
+		log.Error(err, "failed to parse duration of pollingPeriod")
+		return ctrl.Result{}, err
 	}
 
-	endpointsJSON, err := json.Marshal(endpoints)
+	configJSON, err := json.Marshal(config)
 	if err != nil {
 		log.Error(err, "failed to marshal endpoints list")
 		return ctrl.Result{}, err
@@ -125,7 +144,7 @@ func (r *NetworkProberReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	configMap.Name = netProber.Name
 	configMap.Namespace = netProber.Namespace
 	configMap.BinaryData = map[string][]byte{
-		"endpointsJSON": endpointsJSON,
+		"config.json": configJSON,
 	}
 	if configMapExists {
 		err = r.Update(ctx, configMap)

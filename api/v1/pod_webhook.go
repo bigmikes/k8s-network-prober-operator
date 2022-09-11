@@ -79,12 +79,16 @@ func (a *SidecarInjecter) Handle(ctx context.Context, req admission.Request) adm
 				pod.Annotations[AnnotationKey] = AnnotationVal
 				pod.Spec.Containers = append(pod.Spec.Containers, corev1.Container{
 					Name:  "net-prober",
-					Image: "bigmikes/kube-net-prober:test-version-v2",
+					Image: netProber.Spec.AgentImage,
 					VolumeMounts: []corev1.VolumeMount{
 						{
 							Name:      "net-prober-vol",
 							MountPath: "/etc/netprober",
 						},
+					},
+					Env: []corev1.EnvVar{
+						{Name: "HTTP_PORT", Value: netProber.Spec.HttpPort},
+						{Name: "HTTP_PROMETHEUS_PORT", Value: netProber.Spec.HttpPrometheusPort},
 					},
 				})
 				volumeMode := int32(420)

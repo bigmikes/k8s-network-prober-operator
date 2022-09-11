@@ -24,8 +24,14 @@ import (
 type NetworkProberSpec struct {
 	// PodSelector is the label selector to match Pods where the prober sidecar container is deployed.
 	PodSelector metav1.LabelSelector `json:"podSelector"`
-	// HttpTargets is the list of HTTP endpoints that the prober queries.
-	HttpTargets []string `json:"httpTargets"`
+	// HttpPort is the TCP port that Network Prober listens to.
+	HttpPort string `json:"httpPort"`
+	// PollingPeriod is the interval of time between two consecutive HTTP probes towards the same endpoint.
+	PollingPeriod string `json:"pollingPeriod"`
+	// HttpPrometheusPort is the TCP port that Prometheus Exporter listens to.
+	HttpPrometheusPort string `json:"httpPrometheusPort"`
+	// Container Image of the NetworkProber Agent.
+	AgentImage string `json:"agentImage"`
 }
 
 // NetworkProberStatus defines the observed state of NetworkProber

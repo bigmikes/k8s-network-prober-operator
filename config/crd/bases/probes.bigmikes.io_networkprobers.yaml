@@ -35,12 +35,17 @@ spec:
           spec:
             description: NetworkProberSpec defines the desired state of NetworkProber
             properties:
-              httpTargets:
-                description: HttpTargets is the list of HTTP endpoints that the prober
-                  queries.
-                items:
-                  type: string
-                type: array
+              agentImage:
+                description: Container Image of the NetworkProber Agent.
+                type: string
+              httpPort:
+                description: HttpPort is the TCP port that Network Prober listens
+                  to.
+                type: string
+              httpPrometheusPort:
+                description: HttpPrometheusPort is the TCP port that Prometheus Exporter
+                  listens to.
+                type: string
               podSelector:
                 description: PodSelector is the label selector to match Pods where
                   the prober sidecar container is deployed.
@@ -87,9 +92,16 @@ spec:
                     type: object
                 type: object
                 x-kubernetes-map-type: atomic
+              pollingPeriod:
+                description: PollingPeriod is the interval of time between two consecutive
+                  HTTP probes towards the same endpoint.
+                type: string
             required:
-            - httpTargets
+            - agentImage
+            - httpPort
+            - httpPrometheusPort
             - podSelector
+            - pollingPeriod
             type: object
           status:
             description: NetworkProberStatus defines the observed state of NetworkProber
