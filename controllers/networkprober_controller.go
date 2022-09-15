@@ -31,6 +31,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	probesv1alpha1 "github.com/bigmikes/k8s-network-prober-operator/api/v1alpha1"
+	"github.com/go-logr/logr"
+)
+
+type RequestType int
+
+const (
+	CRDCreated RequestType = iota
+	CRDDeleted
+	CRDUpdated
 )
 
 type Config struct {
@@ -89,20 +98,50 @@ func (r *NetworkProberReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	log.Info("Reconciling", "name", req.NamespacedName)
 
-	netProber, deleted, err := r.getNetProber(ctx, req)
+	netProber, reqType, err := r.getNetProber(ctx, req)
 	if err != nil {
 		log.Error(err, "failed to get network prober")
 		return ctrl.Result{}, err
 	}
-	_ = deleted
 
-	// TODO handle delete case
-	// TODO handle modify case
+	switch reqType {
+	case CRDCreated, CRDUpdated:
+		log.Info("Handle create or ", "name", req.NamespacedName)
+		return r.handleCreateUpdate(ctx, log, req.NamespacedName, netProber)
+	default:
+		log.Info("Handle delete", "name", req.NamespacedName)
+		return r.handleDelete(ctx, log, req.NamespacedName, netProber)
+	}
+}
 
+func (r *NetworkProberReconciler) getNetProber(ctx context.Context, req ctrl.Request) (*probesv1alpha1.NetworkProber, RequestType, error) {
+	var netProber probesv1alpha1.NetworkProber
+	err := r.Get(ctx, req.NamespacedName, &netProber)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			if netProber, ok := r.netProberSet[req.NamespacedName]; ok {
+				// Resource exists and now it has been deleted
+				return &netProber, CRDDeleted, nil
+			}
+			return nil, CRDDeleted, nil
+		}
+		return nil, CRDDeleted, err
+	}
+	if _, ok := r.netProberSet[req.NamespacedName]; ok {
+		// Resource already exists, this is an update case
+		return &netProber, CRDUpdated, nil
+	}
+	return &netProber, CRDCreated, nil
+}
+
+func (r *NetworkProberReconciler) handleCreateUpdate(ctx context.Context,
+	log logr.Logger,
+	resName types.NamespacedName,
+	netProber *probesv1alpha1.NetworkProber) (ctrl.Result, error) {
 	// Create ConfigMap
 	configMap := &corev1.ConfigMap{}
 	configMapExists := true
-	err = r.Get(ctx, req.NamespacedName, configMap)
+	err := r.Get(ctx, resName, configMap)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			// ConfigMap does not exist, create it
@@ -157,25 +196,37 @@ func (r *NetworkProberReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		if apierrors.IsConflict(err) {
 			return ctrl.Result{Requeue: true}, err
 		}
+	} else {
+		// Create or update completed successfully, save the CRD in map
+		r.netProberSet[resName] = *netProber
 	}
 
-	return ctrl.Result{}, nil
+	return ctrl.Result{}, err
 }
 
-func (r *NetworkProberReconciler) getNetProber(ctx context.Context, req ctrl.Request) (*probesv1alpha1.NetworkProber, bool, error) {
-	var netProber probesv1alpha1.NetworkProber
-	err := r.Get(ctx, req.NamespacedName, &netProber)
+func (r *NetworkProberReconciler) handleDelete(ctx context.Context,
+	log logr.Logger,
+	resName types.NamespacedName,
+	netProber *probesv1alpha1.NetworkProber) (ctrl.Result, error) {
+
+	configMap := &corev1.ConfigMap{}
+	err := r.Get(ctx, resName, configMap)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			if netProber, ok := r.netProberSet[req.NamespacedName]; ok {
-				// This was a pod and now it has been deleted
-				delete(r.netProberSet, req.NamespacedName)
-				return &netProber, true, nil
-			}
-			return nil, false, nil
+			// ConfigMap does not exist, no need to delete it
+			return ctrl.Result{}, nil
 		}
-		return nil, false, err
+		return ctrl.Result{Requeue: true}, err
 	}
-	r.netProberSet[req.NamespacedName] = netProber
-	return &netProber, false, nil
+	err = r.Delete(ctx, configMap)
+	if err != nil {
+		log.Error(err, "failed to delete configmap")
+		if apierrors.IsConflict(err) {
+			return ctrl.Result{Requeue: true}, err
+		}
+	} else {
+		// Deletion was successful, delete CRD from map
+		delete(r.netProberSet, resName)
+	}
+	return ctrl.Result{}, err
 }
