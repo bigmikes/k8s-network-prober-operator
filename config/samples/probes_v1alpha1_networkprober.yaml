@@ -9,4 +9,4 @@ spec:
   httpPort: "9090"
   pollingPeriod: "10s"
   httpPrometheusPort: "1222"
-  agentImage: "bigmikes/kube-net-prober:test-version-v4"
+  agentImage: "bigmikes/kube-net-prober:test-version-v5"

@@ -43,8 +43,8 @@ const (
 )
 
 type Config struct {
-	EndpointsList []Endpoint    `json:"endpointsList"`
-	PollingPeriod time.Duration `json:"pollingPeriod"`
+	EndpointsMap  map[string]Endpoint `json:"endpointsMap"`
+	PollingPeriod time.Duration       `json:"pollingPeriod"`
 }
 
 type Endpoint struct {
@@ -138,7 +138,7 @@ func (r *NetworkProberReconciler) handleCreateUpdate(ctx context.Context,
 	log logr.Logger,
 	resName types.NamespacedName,
 	netProber *probesv1alpha1.NetworkProber) (ctrl.Result, error) {
-	// Create ConfigMap
+	// Fetch ConfigMap if exists
 	configMap := &corev1.ConfigMap{}
 	configMapExists := true
 	err := r.Get(ctx, resName, configMap)
@@ -160,13 +160,19 @@ func (r *NetworkProberReconciler) handleCreateUpdate(ctx context.Context,
 		log.Error(err, "failed to list pods")
 		return ctrl.Result{Requeue: true}, err
 	}
-	config := Config{}
+	config := Config{
+		EndpointsMap: make(map[string]Endpoint),
+	}
 	for _, pod := range podList.Items {
 		log.Info("Matching pod", "name", pod.Name)
-		config.EndpointsList = append(config.EndpointsList, Endpoint{
+		if len(pod.Status.PodIPs) == 0 {
+			log.Info("Pod does not have IPs yet, requeueing")
+			return ctrl.Result{Requeue: true}, nil
+		}
+		config.EndpointsMap[pod.Name] = Endpoint{
 			IP:   pod.Status.PodIPs[0].IP,
 			Port: netProber.Spec.HttpPort,
-		})
+		}
 	}
 	config.PollingPeriod, err = time.ParseDuration(netProber.Spec.PollingPeriod)
 	if err != nil {

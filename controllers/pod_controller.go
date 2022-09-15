@@ -18,6 +18,7 @@ package controllers
 
 import (
 	"context"
+	"encoding/json"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/labels"
@@ -28,6 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	probesv1alpha1 "github.com/bigmikes/k8s-network-prober-operator/api/v1alpha1"
+	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 )
 
@@ -53,6 +55,7 @@ func NewPodReconciler(clt client.Client, scheme *runtime.Scheme) *PodReconciler 
 //+kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=core,resources=pods/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=core,resources=pods/finalizers,verbs=update
+//+kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -68,28 +71,72 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 
 	log.Info("Reconciling", "name", req.NamespacedName)
 
-	pod, deleted, err := r.getPod(ctx, req)
+	pod, reqType, err := r.getPod(ctx, req)
 	if err != nil {
 		log.Error(err, "failed to get pod")
 		return ctrl.Result{}, err
 	}
-	_ = deleted
 
-	// TODO handle delete case
-	// TODO handle modify case
-
-	netProberList := &probesv1alpha1.NetworkProberList{}
-	err = r.List(ctx, netProberList)
+	matchingNetProbers, err := r.getMatchingNetProbers(ctx, log, pod)
 	if err != nil {
 		log.Error(err, "failed to list pods")
 		return ctrl.Result{}, err
 	}
-	for _, netProber := range netProberList.Items {
-		log.Info("Listed NetProber", "name", netProber.Name)
-		selector := labels.SelectorFromSet(netProber.Spec.PodSelector.MatchLabels)
-		if selector.Matches(labels.Set(pod.Labels)) {
-			log.Info("Match", "pod", pod.Name, "netProber", netProber.Name)
+	for _, netProber := range matchingNetProbers {
+		configMap := &corev1.ConfigMap{}
+		namespacedName := types.NamespacedName{
+			Namespace: netProber.Namespace,
+			Name:      netProber.Name,
 		}
+		err := r.Get(ctx, namespacedName, configMap)
+		if err != nil {
+			log.Error(err, "failed to fetch configmap")
+			if apierrors.IsNotFound(err) {
+				return ctrl.Result{Requeue: true}, nil
+			}
+			return ctrl.Result{}, err
+		}
+		jsonConfig := configMap.BinaryData["config.json"]
+		config := Config{}
+		err = json.Unmarshal(jsonConfig, &config)
+		if err != nil {
+			log.Error(err, "failed to unmarshal JSON config")
+			return ctrl.Result{}, err
+		}
+
+		if reqType == CRDDeleted {
+			delete(config.EndpointsMap, pod.Name)
+		} else {
+			if len(pod.Status.PodIPs) == 0 {
+				log.Info("Pod does not have IPs yet, requeueing")
+				return ctrl.Result{Requeue: true}, nil
+			}
+			config.EndpointsMap[pod.Name] = Endpoint{
+				IP:   pod.Status.PodIPs[0].IP,
+				Port: netProber.Spec.HttpPort,
+			}
+		}
+
+		newJSONConfig, err := json.Marshal(config)
+		if err != nil {
+			log.Error(err, "failed to marshal endpoints list")
+			return ctrl.Result{}, err
+		}
+		configMap.BinaryData["config.json"] = newJSONConfig
+
+		err = r.Update(ctx, configMap)
+		if err != nil {
+			log.Error(err, "failed to create or update configmap")
+			if apierrors.IsConflict(err) {
+				return ctrl.Result{Requeue: true}, err
+			}
+		}
+	}
+
+	if reqType == CRDDeleted {
+		delete(r.podSet, req.NamespacedName)
+	} else {
+		r.podSet[req.NamespacedName] = *pod
 	}
 
 	return ctrl.Result{}, nil
@@ -102,20 +149,44 @@ func (r *PodReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-func (r *PodReconciler) getPod(ctx context.Context, req ctrl.Request) (*corev1.Pod, bool, error) {
+func (r *PodReconciler) getPod(ctx context.Context, req ctrl.Request) (*corev1.Pod, RequestType, error) {
 	var pod corev1.Pod
 	err := r.Get(ctx, req.NamespacedName, &pod)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			if pod, ok := r.podSet[req.NamespacedName]; ok {
 				// This was a pod and not it has been deleted
-				delete(r.podSet, req.NamespacedName)
-				return &pod, true, nil
+				return &pod, CRDDeleted, nil
 			}
-			return nil, false, nil
+			return nil, CRDDeleted, nil
 		}
-		return nil, false, err
+		return nil, CRDDeleted, err
 	}
-	r.podSet[req.NamespacedName] = pod
-	return &pod, false, nil
+	if _, ok := r.podSet[req.NamespacedName]; ok {
+		// Resource already exists, this is an update case
+		return &pod, CRDUpdated, nil
+	}
+	return &pod, CRDCreated, nil
+}
+
+func (r *PodReconciler) getMatchingNetProbers(ctx context.Context,
+	log logr.Logger,
+	pod *corev1.Pod) ([]probesv1alpha1.NetworkProber, error) {
+	netProberList := &probesv1alpha1.NetworkProberList{}
+	err := r.List(ctx, netProberList)
+	if err != nil {
+		log.Error(err, "failed to list pods")
+		return nil, err
+	}
+
+	matchingNetProbers := []probesv1alpha1.NetworkProber{}
+	for _, netProber := range netProberList.Items {
+		log.Info("Listed NetProber", "name", netProber.Name)
+		selector := labels.SelectorFromSet(netProber.Spec.PodSelector.MatchLabels)
+		if selector.Matches(labels.Set(pod.Labels)) {
+			log.Info("Match", "pod", pod.Name, "netProber", netProber.Name)
+			matchingNetProbers = append(matchingNetProbers, netProber)
+		}
+	}
+	return matchingNetProbers, nil
 }
