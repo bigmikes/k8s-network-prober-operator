@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -75,6 +76,16 @@ func (a *SidecarInjecter) Handle(ctx context.Context, req admission.Request) adm
 			if pod.Annotations == nil {
 				pod.Annotations = map[string]string{}
 			}
+			pingPort, err := strconv.Atoi(netProber.Spec.HttpPort)
+			if err != nil {
+				log.Error(err, "failed to convert port string to int")
+				return admission.Errored(http.StatusInternalServerError, err)
+			}
+			prometheusPort, err := strconv.Atoi(netProber.Spec.HttpPrometheusPort)
+			if err != nil {
+				log.Error(err, "failed to convert port string to int")
+				return admission.Errored(http.StatusInternalServerError, err)
+			}
 			if val := pod.Annotations[AnnotationKey]; val != AnnotationVal {
 				pod.Annotations[AnnotationKey] = AnnotationVal
 				pod.Spec.Containers = append(pod.Spec.Containers, corev1.Container{
@@ -89,6 +100,10 @@ func (a *SidecarInjecter) Handle(ctx context.Context, req admission.Request) adm
 					Env: []corev1.EnvVar{
 						{Name: "HTTP_PORT", Value: netProber.Spec.HttpPort},
 						{Name: "HTTP_PROMETHEUS_PORT", Value: netProber.Spec.HttpPrometheusPort},
+					},
+					Ports: []corev1.ContainerPort{
+						{Name: "np-ping", ContainerPort: int32(pingPort)},
+						{Name: "np-prometheus", ContainerPort: int32(prometheusPort)},
 					},
 				})
 				volumeMode := int32(420)
