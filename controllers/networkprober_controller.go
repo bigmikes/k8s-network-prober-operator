@@ -86,18 +86,14 @@ func (r *NetworkProberReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the NetworkProber object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.12.2/pkg/reconcile
+// The NetworkProberReconcile discover Pods matching its podSelector property
+// and populate the ConfigMap needed by the network-prober container to probe the Pods.
 func (r *NetworkProberReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
 
 	log.Info("Reconciling", "name", req.NamespacedName)
 
+	// Get the NetworkProber and the status of the object
 	netProber, reqType, err := r.getNetProber(ctx, req)
 	if err != nil {
 		log.Error(err, "failed to get network prober")
@@ -174,6 +170,7 @@ func (r *NetworkProberReconciler) handleCreateUpdate(ctx context.Context,
 			Port: netProber.Spec.HttpPort,
 		}
 	}
+	// Populate the config with other needed properties
 	config.PollingPeriod, err = time.ParseDuration(netProber.Spec.PollingPeriod)
 	if err != nil {
 		log.Error(err, "failed to parse duration of pollingPeriod")

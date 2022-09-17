@@ -29,13 +29,17 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	probesv1alpha1 "github.com/bigmikes/k8s-network-prober-operator/api/v1alpha1"
+	"github.com/go-logr/logr"
 )
 
 const (
-	AnnotationKey = "sidecar-container-deployed"
+	AnnotationKey = "netprober-container-deployed"
 	AnnotationVal = "true"
 )
 
+// SidecarInjecter is a mutating admission controller that
+// injects the network-prober sidecar container to
+// Pods that match the selector in NetworkProber CRD object.
 type SidecarInjecter struct {
 	Client  client.Client
 	decoder *admission.Decoder
@@ -51,7 +55,7 @@ func (a *SidecarInjecter) InjectDecoder(d *admission.Decoder) error {
 	return nil
 }
 
-// podAnnotator adds an annotation to every incoming pods.
+// Handle intercepts Pod API requests and injects the sidecar container
 func (a *SidecarInjecter) Handle(ctx context.Context, req admission.Request) admission.Response {
 	log := log.FromContext(ctx)
 
@@ -73,51 +77,16 @@ func (a *SidecarInjecter) Handle(ctx context.Context, req admission.Request) adm
 		log.Info("Evaluating selector", "net-prober", netProber.Name)
 		selector := labels.SelectorFromSet(netProber.Spec.PodSelector.MatchLabels)
 		if selector.Matches(labels.Set(pod.Labels)) {
+			log.Info("Selector matched", "net-prober", netProber.Name)
 			if pod.Annotations == nil {
 				pod.Annotations = map[string]string{}
 			}
-			pingPort, err := strconv.Atoi(netProber.Spec.HttpPort)
-			if err != nil {
-				log.Error(err, "failed to convert port string to int")
-				return admission.Errored(http.StatusInternalServerError, err)
-			}
-			prometheusPort, err := strconv.Atoi(netProber.Spec.HttpPrometheusPort)
-			if err != nil {
-				log.Error(err, "failed to convert port string to int")
-				return admission.Errored(http.StatusInternalServerError, err)
-			}
 			if val := pod.Annotations[AnnotationKey]; val != AnnotationVal {
-				pod.Annotations[AnnotationKey] = AnnotationVal
-				pod.Spec.Containers = append(pod.Spec.Containers, corev1.Container{
-					Name:  "net-prober",
-					Image: netProber.Spec.AgentImage,
-					VolumeMounts: []corev1.VolumeMount{
-						{
-							Name:      "net-prober-vol",
-							MountPath: "/etc/netprober",
-						},
-					},
-					Env: []corev1.EnvVar{
-						{Name: "HTTP_PORT", Value: netProber.Spec.HttpPort},
-						{Name: "HTTP_PROMETHEUS_PORT", Value: netProber.Spec.HttpPrometheusPort},
-					},
-					Ports: []corev1.ContainerPort{
-						{Name: "np-ping", ContainerPort: int32(pingPort)},
-						{Name: "np-prometheus", ContainerPort: int32(prometheusPort)},
-					},
-				})
-				volumeMode := int32(420)
-				pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
-					Name: "net-prober-vol",
-					VolumeSource: corev1.VolumeSource{
-						ConfigMap: &corev1.ConfigMapVolumeSource{
-							DefaultMode: &volumeMode,
-							LocalObjectReference: corev1.LocalObjectReference{
-								Name: netProber.Name,
-							},
-						},
-					},
-				})
+				err := injectSidecar(log, pod, netProber)
+				if err != nil {
+					log.Error(err, "failed to inject container in Pod")
+					return admission.Errored(http.StatusInternalServerError, err)
+				}
 			}
 		}
 	}
@@ -128,4 +97,48 @@ func (a *SidecarInjecter) Handle(ctx context.Context, req admission.Request) adm
 	}
 
 	return admission.PatchResponseFromRaw(req.Object.Raw, marshaledPod)
+}
+
+func injectSidecar(log logr.Logger, pod *corev1.Pod, netProber probesv1alpha1.NetworkProber) error {
+	pingPort, err := strconv.Atoi(netProber.Spec.HttpPort)
+	if err != nil {
+		log.Error(err, "failed to convert port string to int")
+		return err
+	}
+	prometheusPort, err := strconv.Atoi(netProber.Spec.HttpPrometheusPort)
+	if err != nil {
+		log.Error(err, "failed to convert port string to int")
+		return err
+	}
+	pod.Annotations[AnnotationKey] = AnnotationVal
+	pod.Spec.Containers = append(pod.Spec.Containers, corev1.Container{
+		Name:  "net-prober",
+		Image: netProber.Spec.AgentImage,
+		VolumeMounts: []corev1.VolumeMount{
+			{
+				Name:      "net-prober-vol",
+				MountPath: "/etc/netprober",
+			},
+		},
+		Env: []corev1.EnvVar{
+			{Name: "HTTP_PORT", Value: netProber.Spec.HttpPort},
+			{Name: "HTTP_PROMETHEUS_PORT", Value: netProber.Spec.HttpPrometheusPort},
+		},
+		Ports: []corev1.ContainerPort{
+			{Name: "np-ping", ContainerPort: int32(pingPort)},
+			{Name: "np-prometheus", ContainerPort: int32(prometheusPort)},
+		},
+	})
+	volumeMode := int32(420)
+	pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
+		Name: "net-prober-vol",
+		VolumeSource: corev1.VolumeSource{
+			ConfigMap: &corev1.ConfigMapVolumeSource{
+				DefaultMode: &volumeMode,
+				LocalObjectReference: corev1.LocalObjectReference{
+					Name: netProber.Name,
+				},
+			},
+		},
+	})
 }
