@@ -141,4 +141,5 @@ func injectSidecar(log logr.Logger, pod *corev1.Pod, netProber probesv1alpha1.Ne
 			},
 		},
 	})
+	return nil
 }
